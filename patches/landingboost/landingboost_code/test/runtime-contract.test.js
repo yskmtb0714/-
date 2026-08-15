@@ -722,20 +722,18 @@ test("cloud Browserless 429 does not retry the exhausted endpoint", async () => 
   assert.equal(output.result.scan_quality_status, "degraded");
 });
 
-test("fail-soft Firecrawl screenshot after Browserless 429 is delivery-repaired", async () => {
-  // soloboss.app 2026-08-14: cloud Browserless failed, Firecrawl still returned a
-  // screenshot, scoring answered 200 fail-soft, then lp-score discarded it because
-  // delivery_repaired was false. Production always runs failClosed + repairForDelivery.
+test("fail-soft capture with a screenshot is delivery-repaired for lp-score", async () => {
+  // soloboss.app 2026-08-14: scoring returned HTTP 200 with scores and a ~704KB
+  // payload, scan_quality_status=degraded, fail_soft=true, delivery_repaired=false.
+  // lp-score then discarded it as UNVERIFIED_DEGRADED_SCORING_PAYLOAD.
+  // Browserless 429 was never logged; reproduce the observed shape only:
+  // visual capture fails, Firecrawl still supplies a screenshot, production
+  // failClosed + repairForDelivery must stamp delivery_repaired.
   const firecrawlScreenshot =
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
-  const browserlessEndpoints = [];
   const firecrawlRequestBodies = [];
-  const browserlessFetchFn = async (endpoint) => {
-    browserlessEndpoints.push(String(endpoint));
-    return new Response(JSON.stringify({ error: "monthly unit allowance exhausted" }), {
-      status: 429,
-      headers: { "content-type": "application/json" },
-    });
+  const browserlessFetchFn = async () => {
+    throw new Error("The operation was aborted due to timeout");
   };
   const firecrawlFetchFn = async (_url, init) => {
     const body = JSON.parse(init.body);
@@ -751,7 +749,6 @@ test("fail-soft Firecrawl screenshot after Browserless 429 is delivery-repaired"
     firecrawlApiKey: "test-key",
     firecrawlFetchFn,
     browserlessEndpoint: "https://cloud.browserless.example/function",
-    browserlessFallbackEndpoint: "http://selfhosted-browserless.example/function",
     browserlessFetchFn,
     llmResponseOverride: buildGenericSaasLlmPayload(),
     includeBenchmarkEvidence: false,
@@ -761,14 +758,7 @@ test("fail-soft Firecrawl screenshot after Browserless 429 is delivery-repaired"
   });
 
   const diagnostics = output.result.meta.fetch_diagnostics;
-  assert.deepEqual(browserlessEndpoints, [
-    "https://cloud.browserless.example/function",
-    "http://selfhosted-browserless.example/function",
-  ]);
-  assert.equal(diagnostics.browserless_fallback_configured, true);
-  assert.equal(diagnostics.browserless_fallback_attempted, true);
-  assert.equal(diagnostics.browserless_fallback_used, false);
-  assert.equal(diagnostics.browserless_retry_attempted, false);
+  assert.equal(diagnostics.fail_soft, true);
   assert.equal(diagnostics.firecrawl_screenshot_fallback_used, true);
   assert.equal(output.result.ok, true);
   assert.equal(output.result.scan_quality_status, "degraded");
