@@ -1924,6 +1924,95 @@ function safeFailureMessage(error) {
   return String(error?.message || error || "unknown failure").slice(0, 300);
 }
 
+function browserlessCaptureUsable(result) {
+  if (result?.status !== "fulfilled") return false;
+  const data = asObject(asObject(result.value).data || result.value);
+  const meta = asObject(data.meta);
+  return Boolean(toTrimmed(data.screenshot || data.screenshot_b64)) &&
+    meta.hard_fail !== true &&
+    meta.soft_fail !== true &&
+    meta.screenshot_ok !== false;
+}
+
+async function settleTimed(operation) {
+  const startedAt = Date.now();
+  try {
+    return {
+      status: "fulfilled",
+      value: await operation(),
+      duration_ms: Date.now() - startedAt,
+    };
+  } catch (reason) {
+    return {
+      status: "rejected",
+      reason,
+      duration_ms: Date.now() - startedAt,
+    };
+  }
+}
+
+function emptyBrowserlessFallbackDiagnostics() {
+  return {
+    browserless_fallback_configured: false,
+    browserless_fallback_attempted: false,
+    browserless_fallback_used: false,
+    browserless_fallback_duration_ms: 0,
+    browserless_fallback_error: "",
+  };
+}
+
+function resolveBrowserlessFallbackEndpoint(options = {}) {
+  const fallbackEndpoint = toTrimmed(
+    options.browserlessFallbackEndpoint || process.env.BROWSERLESS_FALLBACK_ENDPOINT,
+  );
+  const primaryEndpoint = toTrimmed(options.browserlessEndpoint || process.env.BROWSERLESS_ENDPOINT);
+  return {
+    primaryEndpoint,
+    fallbackEndpoint,
+    configured: Boolean(fallbackEndpoint && fallbackEndpoint !== primaryEndpoint),
+  };
+}
+
+async function fetchBrowserlessWithLocalFallback(browserlessStage, options = {}, diagnostics = {}) {
+  const { fallbackEndpoint, configured } = resolveBrowserlessFallbackEndpoint(options);
+  Object.assign(diagnostics, emptyBrowserlessFallbackDiagnostics(), {
+    browserless_fallback_configured: configured,
+  });
+
+  const primary = await settleTimed(() => fetchBrowserless(browserlessStage.browserless_payload_string, {
+    endpoint: options.browserlessEndpoint,
+    fetchFn: options.browserlessFetchFn,
+    timeoutMs: options.browserlessTimeoutMs,
+  }));
+  diagnostics.browserless_duration_ms = primary.duration_ms;
+  diagnostics.browserless_used = primary.status === "fulfilled";
+  diagnostics.browserless_error =
+    primary.status === "rejected" ? safeFailureMessage(primary.reason) : "";
+
+  if (!configured || browserlessCaptureUsable(primary)) {
+    return primary;
+  }
+
+  const fallbackStartedAt = Date.now();
+  diagnostics.browserless_fallback_attempted = true;
+  const fallback = await settleTimed(() => fetchBrowserless(browserlessStage.browserless_payload_string, {
+    endpoint: fallbackEndpoint,
+    fetchFn: options.browserlessFetchFn,
+    timeoutMs: options.browserlessFallbackTimeoutMs || 18_000,
+  }));
+  diagnostics.browserless_fallback_duration_ms = Date.now() - fallbackStartedAt;
+  if (browserlessCaptureUsable(fallback)) {
+    diagnostics.browserless_fallback_used = true;
+    diagnostics.browserless_used = true;
+    diagnostics.browserless_error = "";
+    return fallback;
+  }
+  diagnostics.browserless_fallback_error = fallback.status === "rejected"
+    ? safeFailureMessage(fallback.reason)
+    : "fallback_capture_unusable";
+  return primary;
+}
+
 function emergencyUrlOnlyFetchPayload(url, error) {
   let hostname = "Landing page";
   try {
@@ -2012,45 +2101,30 @@ async function buildFetchPayloadWithStrategy(authItem, browserlessStage, input, 
 
   const useFirecrawl = firecrawlModeEnabled(options);
   if (!useFirecrawl) {
-    const startedAt = Date.now();
-    const fetchPayload = await fetchBrowserless(browserlessStage.browserless_payload_string, {
-      endpoint: options.browserlessEndpoint,
-      fetchFn: options.browserlessFetchFn,
-      timeoutMs: options.browserlessTimeoutMs,
-    });
+    const diagnostics = {
+      strategy: "browserless_only",
+      firecrawl_used: false,
+      browserless_used: false,
+      browserless_duration_ms: 0,
+      browserless_error: "",
+      ...emptyBrowserlessFallbackDiagnostics(),
+    };
+    const result = await fetchBrowserlessWithLocalFallback(browserlessStage, options, diagnostics);
+    if (result.status !== "fulfilled") {
+      throw result.reason;
+    }
     return {
-      fetchPayload,
-      diagnostics: {
-        strategy: "browserless_only",
-        firecrawl_used: false,
-        browserless_used: true,
-        browserless_duration_ms: Date.now() - startedAt,
-      },
+      fetchPayload: result.value,
+      diagnostics,
     };
   }
-
-  const settleTimed = async (operation) => {
-    const startedAt = Date.now();
-    try {
-      return {
-        status: "fulfilled",
-        value: await operation(),
-        duration_ms: Date.now() - startedAt,
-      };
-    } catch (reason) {
-      return {
-        status: "rejected",
-        reason,
-        duration_ms: Date.now() - startedAt,
-      };
-    }
-  };
 
   // Reuse the already-built standard browserless payload for the visual half of the
   // hybrid fetch. (A lighter "visual_only" extract-mode payload exists on the local
   // dev copy of this pipeline but has not been merged upstream yet, so we deliberately
   // do not depend on it here to avoid touching the much-changed browserless-code.js.)
-  const [firecrawlResult, browserlessResult] = await Promise.all([
+  const browserlessDiagnostics = emptyBrowserlessFallbackDiagnostics();
+  const [firecrawlResult, effectiveBrowserlessResult] = await Promise.all([
     settleTimed(() => fetchFirecrawlLandingPage(authItem.lp_url, {
       apiKey: options.firecrawlApiKey,
       endpoint: options.firecrawlEndpoint,
@@ -2060,79 +2134,23 @@ async function buildFetchPayloadWithStrategy(authItem, browserlessStage, input, 
       timeoutMs: options.firecrawlTimeoutMs,
       fetchFn: options.firecrawlFetchFn,
     })),
-    settleTimed(() => fetchBrowserless(browserlessStage.browserless_payload_string, {
-      endpoint: options.browserlessEndpoint,
-      fetchFn: options.browserlessFetchFn,
-      timeoutMs: options.browserlessTimeoutMs,
-    })),
+    fetchBrowserlessWithLocalFallback(browserlessStage, options, browserlessDiagnostics),
   ]);
 
+  const { fallbackEndpoint } = resolveBrowserlessFallbackEndpoint(options);
   const diagnostics = {
     strategy: "firecrawl_text_browserless_visual",
     firecrawl_used: firecrawlResult.status === "fulfilled",
-    browserless_used: browserlessResult.status === "fulfilled",
     firecrawl_duration_ms: firecrawlResult.duration_ms,
-    browserless_duration_ms: browserlessResult.duration_ms,
     firecrawl_error:
       firecrawlResult.status === "rejected" ? String(firecrawlResult.reason?.message || firecrawlResult.reason) : "",
-    browserless_error:
-      browserlessResult.status === "rejected" ? String(browserlessResult.reason?.message || browserlessResult.reason) : "",
-    browserless_fallback_configured: false,
-    browserless_fallback_attempted: false,
-    browserless_fallback_used: false,
-    browserless_fallback_duration_ms: 0,
-    browserless_fallback_error: "",
+    ...browserlessDiagnostics,
     firecrawl_include_json: false,
     firecrawl_screenshot_requested: false,
     firecrawl_screenshot_fallback_used: false,
     firecrawl_screenshot_fallback_duration_ms: 0,
     firecrawl_screenshot_fallback_error: "",
   };
-
-  let effectiveBrowserlessResult = browserlessResult;
-  const fallbackEndpoint = toTrimmed(
-    options.browserlessFallbackEndpoint || process.env.BROWSERLESS_FALLBACK_ENDPOINT,
-  );
-  const primaryEndpoint = toTrimmed(options.browserlessEndpoint || process.env.BROWSERLESS_ENDPOINT);
-  diagnostics.browserless_fallback_configured = Boolean(
-    fallbackEndpoint && fallbackEndpoint !== primaryEndpoint,
-  );
-  const browserlessResultUsable = (result) => {
-    if (result?.status !== "fulfilled") return false;
-    const data = asObject(asObject(result.value).data || result.value);
-    const meta = asObject(data.meta);
-    return Boolean(toTrimmed(data.screenshot || data.screenshot_b64)) &&
-      meta.hard_fail !== true &&
-      meta.soft_fail !== true &&
-      meta.screenshot_ok !== false;
-  };
-
-  if (
-    diagnostics.browserless_fallback_configured &&
-    !browserlessResultUsable(effectiveBrowserlessResult)
-  ) {
-    const fallbackStartedAt = Date.now();
-    diagnostics.browserless_fallback_attempted = true;
-    const fallbackResult = await settleTimed(() => fetchBrowserless(
-      browserlessStage.browserless_payload_string,
-      {
-        endpoint: fallbackEndpoint,
-        fetchFn: options.browserlessFetchFn,
-        timeoutMs: options.browserlessFallbackTimeoutMs || 18_000,
-      },
-    ));
-    diagnostics.browserless_fallback_duration_ms = Date.now() - fallbackStartedAt;
-    if (browserlessResultUsable(fallbackResult)) {
-      effectiveBrowserlessResult = fallbackResult;
-      diagnostics.browserless_fallback_used = true;
-      diagnostics.browserless_used = true;
-      diagnostics.browserless_error = "";
-    } else {
-      diagnostics.browserless_fallback_error = fallbackResult.status === "rejected"
-        ? safeFailureMessage(fallbackResult.reason)
-        : "fallback_capture_unusable";
-    }
-  }
 
   if (firecrawlResult.status === "fulfilled") {
     let firecrawlPayload = firecrawlToFetchPayload(firecrawlResult.value, { url: authItem.lp_url });
@@ -2281,7 +2299,6 @@ async function buildFetchPayloadWithStrategy(authItem, browserlessStage, input, 
   const captureError =
     firecrawlResult.reason ||
     effectiveBrowserlessResult.reason ||
-    browserlessResult.reason ||
     new Error("Both Firecrawl and Browserless failed");
   const directStartedAt = Date.now();
   try {

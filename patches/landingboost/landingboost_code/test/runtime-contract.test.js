@@ -639,6 +639,69 @@ test("self-hosted Browserless fallback replaces an unavailable cloud capture", a
   assert.equal(output.result.screenshot_b64, "base64-jpeg");
 });
 
+test("browserless-only cloud 429 falls back to local Browserless", async () => {
+  const browserlessEndpoints = [];
+  const healthyBrowserlessPayload = {
+    data: {
+      ...buildGenericSaasFetchPayload(),
+      screenshot: "base64-jpeg",
+      screenshot_b64: "base64-jpeg",
+      screenshot_type: "jpeg",
+      meta: {
+        ...buildGenericSaasFetchPayload().meta,
+        screenshot_ok: true,
+        hard_fail: false,
+        soft_fail: false,
+        final_url: "https://www.loom.com/",
+      },
+      heroBlock: {
+        found: true,
+        headline: "Loom screen recorder for work",
+        subheadline: "Record quick videos to update your team and explain work faster",
+        primary_cta: "Get Loom for free",
+      },
+    },
+  };
+  const browserlessFetchFn = async (endpoint) => {
+    browserlessEndpoints.push(String(endpoint));
+    if (String(endpoint).includes("cloud.browserless.example")) {
+      return new Response(JSON.stringify({ error: "monthly unit allowance exhausted" }), {
+        status: 429,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return new Response(JSON.stringify(healthyBrowserlessPayload), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+
+  const output = await runWorkflowRequest(buildMockRequest({ lp_url: "https://www.loom.com/" }), {
+    useFirecrawl: false,
+    browserlessEndpoint: "https://cloud.browserless.example/function",
+    browserlessFallbackEndpoint: "http://127.0.0.1:3001/function",
+    browserlessFetchFn,
+    llmResponseOverride: buildGenericSaasLlmPayload(),
+    includeBenchmarkEvidence: false,
+    forceVision: false,
+    failClosed: true,
+    repairForDelivery: true,
+  });
+
+  const diagnostics = output.result.meta.fetch_diagnostics;
+  assert.deepEqual(browserlessEndpoints, [
+    "https://cloud.browserless.example/function",
+    "http://127.0.0.1:3001/function",
+  ]);
+  assert.equal(diagnostics.strategy, "browserless_only");
+  assert.equal(diagnostics.browserless_fallback_configured, true);
+  assert.equal(diagnostics.browserless_fallback_attempted, true);
+  assert.equal(diagnostics.browserless_fallback_used, true);
+  assert.equal(diagnostics.browserless_fallback_error, "");
+  assert.equal(output.result.screenshot_b64, "base64-jpeg");
+  assert.deepEqual(wouldLpScoreAcceptScan(output.result), { ok: true, reason: "accepted" });
+});
+
 function wouldLpScoreAcceptScan(scoreData) {
   const meta = scoreData && typeof scoreData.meta === "object" ? scoreData.meta : {};
   const degraded =
