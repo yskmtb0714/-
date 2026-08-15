@@ -1,0 +1,126 @@
+{
+  "ok": true,
+  "capture_engine": "ghcr.io/browserless/chromium /function",
+  "playwright_used": false,
+  "cloud_endpoint": "http://127.0.0.1:3999/function",
+  "local_endpoint": "http://127.0.0.1:3001/function",
+  "outDir": "/tmp/local-scans/browserless-shots",
+  "summaries": [
+    {
+      "url": "https://soloboss.app/",
+      "ok": true,
+      "duration_ms": 6900,
+      "strategy": "browserless_only",
+      "browserless_error": "",
+      "browserless_fallback_configured": true,
+      "browserless_fallback_attempted": true,
+      "browserless_fallback_used": true,
+      "browserless_fallback_duration_ms": 6170,
+      "browserless_fallback_error": "",
+      "scan_quality_status": "ok",
+      "fail_soft": false,
+      "delivery_repaired": false,
+      "screenshot": {
+        "ok": true,
+        "bytes": 128785,
+        "kind": "jpeg"
+      },
+      "headline": "Stop running your freelance business across 6 different apps.",
+      "primary_cta": "Start free for 14 days",
+      "overall_100": 71,
+      "lp_score_gate": {
+        "ok": true,
+        "reason": "accepted"
+      },
+      "file": "/tmp/local-scans/browserless-shots/json/1786760557243-soloboss-app.json",
+      "clone_path_ok": true
+    },
+    {
+      "url": "https://webscore.now/",
+      "ok": true,
+      "duration_ms": 9141,
+      "strategy": "browserless_only",
+      "browserless_error": "",
+      "browserless_fallback_configured": true,
+      "browserless_fallback_attempted": true,
+      "browserless_fallback_used": true,
+      "browserless_fallback_duration_ms": 8319,
+      "browserless_fallback_error": "",
+      "scan_quality_status": "ok",
+      "fail_soft": false,
+      "delivery_repaired": false,
+      "screenshot": {
+        "ok": true,
+        "bytes": 147793,
+        "kind": "jpeg"
+      },
+      "headline": "Uncover what's quietly costing you traffic, conversions, and rankings",
+      "primary_cta": "Scan my website free",
+      "overall_100": 71,
+      "lp_score_gate": {
+        "ok": true,
+        "reason": "accepted"
+      },
+      "file": "/tmp/local-scans/browserless-shots/json/1786760566384-webscore-now.json",
+      "clone_path_ok": true
+    },
+    {
+      "url": "https://mozolist.com/",
+      "ok": true,
+      "duration_ms": 4851,
+      "strategy": "browserless_only",
+      "browserless_error": "",
+      "browserless_fallback_configured": true,
+      "browserless_fallback_attempted": true,
+      "browserless_fallback_used": true,
+      "browserless_fallback_duration_ms": 4642,
+      "browserless_fallback_error": "",
+      "scan_quality_status": "ok",
+      "fail_soft": false,
+      "delivery_repaired": false,
+      "screenshot": {
+        "ok": true,
+        "bytes": 96667,
+        "kind": "jpeg"
+      },
+      "headline": "No launches yet today. Be the first.",
+      "primary_cta": "Submit your product",
+      "overall_100": 71,
+      "lp_score_gate": {
+        "ok": true,
+        "reason": "accepted"
+      },
+      "file": "/tmp/local-scans/browserless-shots/json/1786760571236-mozolist-com.json",
+      "clone_path_ok": true
+    },
+    {
+      "url": "https://landingboost.app/",
+      "ok": true,
+      "duration_ms": 8998,
+      "strategy": "browserless_only",
+      "browserless_error": "",
+      "browserless_fallback_configured": true,
+      "browserless_fallback_attempted": true,
+      "browserless_fallback_used": true,
+      "browserless_fallback_duration_ms": 8390,
+      "browserless_fallback_error": "",
+      "scan_quality_status": "ok",
+      "fail_soft": false,
+      "delivery_repaired": false,
+      "screenshot": {
+        "ok": true,
+        "bytes": 140924,
+        "kind": "jpeg"
+      },
+      "headline": "Find the first edit before you send more traffic.",
+      "primary_cta": "Find my first edit free",
+      "overall_100": 74,
+      "lp_score_gate": {
+        "ok": true,
+        "reason": "accepted"
+      },
+      "file": "/tmp/local-scans/browserless-shots/json/1786760580234-landingboost-app.json",
+      "clone_path_ok": true
+    }
+  ]
+}

@@ -1,0 +1,54 @@
+--- a/supabase/functions/lp-score/index.ts
++++ b/supabase/functions/lp-score/index.ts
+@@ -1165,6 +1165,34 @@
+   return meta?.delivery_repaired === true;
+ }
+ 
++function clipDiagnosticText(value: unknown, max = 300): string | null {
++  if (typeof value !== "string" || !value) return null;
++  return value.slice(0, max);
++}
++
++function summarizeFetchDiagnostics(scoreData: any): Record<string, unknown> {
++  const meta = scoreData && typeof scoreData.meta === "object" ? scoreData.meta : {};
++  const diagnostics =
++    meta.fetch_diagnostics && typeof meta.fetch_diagnostics === "object"
++      ? meta.fetch_diagnostics
++      : {};
++  return {
++    fetchSource: meta.fetch_source ?? diagnostics.strategy ?? null,
++    failSoft: diagnostics.fail_soft === true || meta.fail_soft === true,
++    browserlessUsed: diagnostics.browserless_used === true,
++    browserlessError: clipDiagnosticText(diagnostics.browserless_error),
++    browserlessDurationMs: diagnostics.browserless_duration_ms ?? null,
++    browserlessFallbackConfigured: diagnostics.browserless_fallback_configured === true,
++    browserlessFallbackAttempted: diagnostics.browserless_fallback_attempted === true,
++    browserlessFallbackUsed: diagnostics.browserless_fallback_used === true,
++    browserlessFallbackError: clipDiagnosticText(diagnostics.browserless_fallback_error),
++    browserlessRetryAttempted: diagnostics.browserless_retry_attempted === true,
++    browserlessRetryError: clipDiagnosticText(diagnostics.browserless_retry_error, 200),
++    firecrawlUsed: diagnostics.firecrawl_used === true,
++    firecrawlScreenshotFallbackUsed: diagnostics.firecrawl_screenshot_fallback_used === true,
++  };
++}
++
+ function hasFactContradictions(scoreData: any): boolean {
+   return Array.isArray(scoreData?.fact_contradictions) && scoreData.fact_contradictions.length > 0;
+ }
+@@ -3944,6 +3972,8 @@
+       }
+     }
+ 
++    console.log(`[${requestId}] scoring backend fetch diagnostics:`, summarizeFetchDiagnostics(scoreData));
++
+     if (isDegradedScoringPayload(scoreData)) {
+       const deliveryRepaired = isDeliveryRepairedScoringPayload(scoreData);
+       console.warn(`[${requestId}] Scoring payload used a repair path`, {
+@@ -3952,6 +3982,7 @@
+         scanQualityStatus: (scoreData as any)?.scan_quality_status ?? null,
+         failSoft: (scoreData as any)?.meta?.fail_soft === true,
+         deliveryRepaired,
++        ...summarizeFetchDiagnostics(scoreData),
+       });
+       if (!deliveryRepaired) {
+         await releaseCredit();

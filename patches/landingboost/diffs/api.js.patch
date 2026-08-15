@@ -1,0 +1,174 @@
+--- a/landingboost_code/src/api.js
++++ b/landingboost_code/src/api.js
+@@ -2077,6 +2077,11 @@
+       firecrawlResult.status === "rejected" ? String(firecrawlResult.reason?.message || firecrawlResult.reason) : "",
+     browserless_error:
+       browserlessResult.status === "rejected" ? String(browserlessResult.reason?.message || browserlessResult.reason) : "",
++    browserless_fallback_configured: false,
++    browserless_fallback_attempted: false,
++    browserless_fallback_used: false,
++    browserless_fallback_duration_ms: 0,
++    browserless_fallback_error: "",
+     firecrawl_include_json: false,
+     firecrawl_screenshot_requested: false,
+     firecrawl_screenshot_fallback_used: false,
+@@ -2084,11 +2089,56 @@
+     firecrawl_screenshot_fallback_error: "",
+   };
+ 
++  let effectiveBrowserlessResult = browserlessResult;
++  const fallbackEndpoint = toTrimmed(
++    options.browserlessFallbackEndpoint || process.env.BROWSERLESS_FALLBACK_ENDPOINT,
++  );
++  const primaryEndpoint = toTrimmed(options.browserlessEndpoint || process.env.BROWSERLESS_ENDPOINT);
++  diagnostics.browserless_fallback_configured = Boolean(
++    fallbackEndpoint && fallbackEndpoint !== primaryEndpoint,
++  );
++  const browserlessResultUsable = (result) => {
++    if (result?.status !== "fulfilled") return false;
++    const data = asObject(asObject(result.value).data || result.value);
++    const meta = asObject(data.meta);
++    return Boolean(toTrimmed(data.screenshot || data.screenshot_b64)) &&
++      meta.hard_fail !== true &&
++      meta.soft_fail !== true &&
++      meta.screenshot_ok !== false;
++  };
++
++  if (
++    diagnostics.browserless_fallback_configured &&
++    !browserlessResultUsable(effectiveBrowserlessResult)
++  ) {
++    const fallbackStartedAt = Date.now();
++    diagnostics.browserless_fallback_attempted = true;
++    const fallbackResult = await settleTimed(() => fetchBrowserless(
++      browserlessStage.browserless_payload_string,
++      {
++        endpoint: fallbackEndpoint,
++        fetchFn: options.browserlessFetchFn,
++        timeoutMs: options.browserlessFallbackTimeoutMs || 18_000,
++      },
++    ));
++    diagnostics.browserless_fallback_duration_ms = Date.now() - fallbackStartedAt;
++    if (browserlessResultUsable(fallbackResult)) {
++      effectiveBrowserlessResult = fallbackResult;
++      diagnostics.browserless_fallback_used = true;
++      diagnostics.browserless_used = true;
++      diagnostics.browserless_error = "";
++    } else {
++      diagnostics.browserless_fallback_error = fallbackResult.status === "rejected"
++        ? safeFailureMessage(fallbackResult.reason)
++        : "fallback_capture_unusable";
++    }
++  }
++
+   if (firecrawlResult.status === "fulfilled") {
+     let firecrawlPayload = firecrawlToFetchPayload(firecrawlResult.value, { url: authItem.lp_url });
+     const browserlessData =
+-      browserlessResult.status === "fulfilled"
+-        ? asObject(asObject(browserlessResult.value).data || browserlessResult.value)
++      effectiveBrowserlessResult.status === "fulfilled"
++        ? asObject(asObject(effectiveBrowserlessResult.value).data || effectiveBrowserlessResult.value)
+         : {};
+     const browserlessMeta = asObject(browserlessData.meta);
+     const browserlessScreenshot = toTrimmed(
+@@ -2139,11 +2189,11 @@
+           Date.now() - screenshotFallbackStartedAt;
+       }
+     }
+-    if (browserlessResult.status === "fulfilled") {
++    if (effectiveBrowserlessResult.status === "fulfilled") {
+       return {
+         fetchPayload: mergeFirecrawlTextWithBrowserlessVisual(
+           firecrawlPayload,
+-          browserlessResult.value,
++          effectiveBrowserlessResult.value,
+           diagnostics,
+         ),
+         diagnostics,
+@@ -2173,9 +2223,15 @@
+     const remainingMs = Number(options.remainingWorkflowMs);
+     const headroomMs = Number.isFinite(remainingMs) ? remainingMs - 25000 : 22000;
+     const retryBudgetMs = Math.min(Number(options.browserlessRetryTimeoutMs) || 22000, headroomMs);
+-    if (retryBudgetMs >= 8000) {
++    const cloudRejectedWithQuota = /429|allowance exhausted|unit allowance/i.test(
++      String(diagnostics.browserless_error || ""),
++    );
++    const retryEndpoint = diagnostics.browserless_fallback_configured
++      ? fallbackEndpoint
++      : options.browserlessEndpoint;
++    if (retryBudgetMs >= 8000 && !cloudRejectedWithQuota && !diagnostics.browserless_fallback_attempted) {
+       const retry = await settleTimed(() => fetchBrowserless(browserlessStage.browserless_payload_string, {
+-        endpoint: options.browserlessEndpoint,
++        endpoint: retryEndpoint,
+         fetchFn: options.browserlessFetchFn,
+         timeoutMs: retryBudgetMs,
+       }));
+@@ -2191,7 +2247,11 @@
+       diagnostics.browserless_retry_error = String(retry.reason?.message || retry.reason || "");
+     } else {
+       diagnostics.browserless_retry_attempted = false;
+-      diagnostics.browserless_retry_error = "insufficient_budget";
++      diagnostics.browserless_retry_error = cloudRejectedWithQuota
++        ? "cloud_quota_exhausted"
++        : diagnostics.browserless_fallback_attempted
++          ? "fallback_already_attempted"
++          : "insufficient_budget";
+     }
+ 
+     diagnostics.strategy = "firecrawl_text_after_browserless_failed";
+@@ -2208,9 +2268,9 @@
+     return { fetchPayload: firecrawlPayload, diagnostics };
+   }
+ 
+-  if (browserlessResult.status === "fulfilled") {
++  if (effectiveBrowserlessResult.status === "fulfilled") {
+     return {
+-      fetchPayload: browserlessResult.value,
++      fetchPayload: effectiveBrowserlessResult.value,
+       diagnostics: {
+         ...diagnostics,
+         strategy: "firecrawl_failed_browserless_used",
+@@ -2220,6 +2280,7 @@
+ 
+   const captureError =
+     firecrawlResult.reason ||
++    effectiveBrowserlessResult.reason ||
+     browserlessResult.reason ||
+     new Error("Both Firecrawl and Browserless failed");
+   const directStartedAt = Date.now();
+@@ -2522,6 +2583,11 @@
+         15000,
+       ),
+       browserlessTimeoutMs: boundedStageTimeout(options.browserlessTimeoutMs, 25000, 15000),
++      browserlessFallbackTimeoutMs: boundedStageTimeout(
++        options.browserlessFallbackTimeoutMs,
++        18000,
++        30000,
++      ),
+       firecrawlScreenshotTimeoutMs: boundedStageTimeout(
+         options.firecrawlScreenshotTimeoutMs,
+         16000,
+@@ -2915,12 +2981,21 @@
+       rejected_scoring_quality: scoringQuality,
+     };
+   }
+-  if (repairForDelivery && captureQuality.ok !== true) {
++  if (
++    repairForDelivery &&
++    (
++      captureQuality.ok !== true ||
++      fetchDiagnostics.fail_soft === true ||
++      finalResult.scan_quality_status === "degraded" ||
++      asObject(finalResult.meta).fail_soft === true
++    )
++  ) {
+     finalResult.meta = {
+       ...asObject(finalResult.meta),
+       delivery_repaired: true,
+       delivery_repair_reason:
+-        asObject(finalResult.meta).delivery_repair_reason || "capture_metadata_incomplete",
++        asObject(finalResult.meta).delivery_repair_reason ||
++        (fetchDiagnostics.fail_soft === true ? "capture_fail_soft" : "capture_metadata_incomplete"),
+     };
+   }
+   validateCoreResponseContract(finalResult);
